@@ -93,7 +93,17 @@ class ActivityController: UITableViewController {
   }
   
   func processEvents(_ newEvents: [Event]) {
+    var updatedEvents = newEvents + events.value
+    if updatedEvents.count > 50 {
+      updatedEvents = [Event](updatedEvents.prefix(upTo: 50))
+    }
     
+    events.accept(updatedEvents)
+    
+    DispatchQueue.main.async {
+      self.tableView.reloadData()
+      self.refreshControl?.endRefreshing()
+    }
   }
 
   // MARK: - Table Data Source
