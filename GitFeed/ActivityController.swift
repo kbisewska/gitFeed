@@ -62,7 +62,13 @@ class ActivityController: UITableViewController {
   }
 
   func fetchEvents(repo: String) {
-
+    let response = Observable.from([repo])
+      .map { urlString -> URL in
+        return URL(string: "https://api.github.com/repos/\(urlString)/events")!
+      }
+      .map { url -> URLRequest in
+        return URLRequest(url: url)
+      }
   }
   
   func processEvents(_ newEvents: [Event]) {
