@@ -37,9 +37,11 @@ class ActivityController: UITableViewController {
   private let repo = "ReactiveX/RxSwift"
 
   private let events = BehaviorRelay<[Event]>(value: [])
+  private let lastModified = BehaviorRelay<String?>(value: nil)
   private let bag = DisposeBag()
   
   private let eventsFileURL = cachedFileURL("events.json")
+  private let modifiedFileURL = cachedFileURL("modified.txt")
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -59,6 +61,10 @@ class ActivityController: UITableViewController {
       events.accept(persistedEvents)
     }
     
+    if let lastMidifiedString = try? String(contentsOf: modifiedFileURL, encoding: .utf8) {
+      lastModified.accept(lastMidifiedString)
+    }
+    
     refresh()
   }
 
@@ -70,12 +76,31 @@ class ActivityController: UITableViewController {
   }
 
   func fetchEvents(repo: String) {
-    let response = Observable.from([repo])
+    let response = Observable.from(["https://api.github.com/search/ repositories?q=language:swift&per_page=5"])
+      .map { urlString -> URL in
+        return URL(string: urlString)!
+      }
+      .flatMap { url -> Observable<Any> in
+        let request = URLRequest(url: url)
+        return URLSession.shared.rx.json(request: request)
+      }
+      .flatMap { response -> Observable<String> in
+        guard let response = response as? [String: Any],
+          let items = response["items"] as? [[String: Any]] else {
+            return Observable.empty()
+        }
+        
+        return Observable.from(items.map { $0["full_name"] as! String })
+      }
       .map { urlString -> URL in
         return URL(string: "https://api.github.com/repos/\(urlString)/events")!
       }
-      .map { url -> URLRequest in
-        return URLRequest(url: url)
+      .map { [weak self] url -> URLRequest in
+        var request = URLRequest(url: url)
+        if let modifiedHeader = self?.lastModified.value {
+          request.addValue(modifiedHeader, forHTTPHeaderField: "Last-Modified")
+        }
+        return request
       }
       .flatMap { request -> Observable<(response: HTTPURLResponse, data: Data)> in
         return URLSession.shared.rx.response(request: request)
@@ -96,6 +121,26 @@ class ActivityController: UITableViewController {
       }
       .subscribe(onNext: { [weak self] newEvents in
         self?.processEvents(newEvents)
+      })
+      .disposed(by: bag)
+    
+    response
+      .filter { response, _ in
+        return 200..<400 ~= response.statusCode
+      }
+      .flatMap { response, _ -> Observable<String> in
+        guard let value = response.allHeaderFields["Last-Modified"] as? String
+          else {
+            return Observable.empty()
+          }
+        
+        return Observable.just(value)
+      }
+      .subscribe(onNext: { [weak self] modifiedHeader in
+        guard let self = self else { return }
+        
+        self.lastModified.accept(modifiedHeader)
+        try? modifiedHeader.write(to: self.modifiedFileURL, atomically: true, encoding: .utf8)
       })
       .disposed(by: bag)
   }
